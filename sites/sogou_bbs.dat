@@ -1,0 +1,19 @@
+[TEMPLATE]
+TASK_TYPE = 论坛
+REQUEST_URL = http://www.sogou.com/web?chuidq=40&query={0}&tsn=0&sut=2440&interation=196648&sst0=1432262554767&page={1}&ie=utf8
+SEARCH_IN_SITE = None
+DUP_METHOD = LINK
+ENCODE_TYPE = utf8
+PAGE_START = 1
+PAGE_INCREACE_CNT = 1
+PAGE_TOTAL_CNT = 50
+STOP_TURN_PAGE = True
+TIMEOUT_SEC = 120
+FETCH_INTERVAL_SEC = 600
+FETCH_THREAD_NUM = 5
+POST_DATA = None
+REQUEST_HEADERS = { \
+            'User-Agent':"Mozilla/5.0 (Windows NT 5.1; rv:32.0) Gecko/20100101 Firefox/32.0", \
+            'Accept':"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",\
+			'Accept-Encoding':"gzip, deflate"
+            }
