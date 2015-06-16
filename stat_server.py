@@ -16,6 +16,15 @@ class HostStat:
         self.m_data= {}
         self.m_cur_hour = None
         self.m_cur_day  = None
+    def reset_hour_stat(self):
+        for host, host_stat in  self.m_data.items():
+            for keyword, keyword_stat in host_stat.items():
+                keyword_stat[0] = keyword_stat[1] = keyword_stat[2] = 0
+    def reset_day_stat(self):
+        for host, host_stat in  self.m_data.items():
+            for keyword, keyword_stat in host_stat.items():
+                keyword_stat[0] = keyword_stat[1] = keyword_stat[2] = 0
+                keyword_stat[3] = keyword_stat[4] = keyword_stat[5] = 0
     def add_stat(self, host, keyword, new_link_count, dup_link_count):
         host_stat = self.m_data.get(host)
         if host_stat is None:
@@ -30,10 +39,10 @@ class HostStat:
         cur_hour = time.strftime('%H',time.localtime(time.time()))
         cur_day  = time.strftime('%d',time.localtime(time.time()))
         if cur_hour != self.m_cur_hour:
-            keyword_stat[0] = keyword_stat[1] = keyword_stat[2] = 0
+            self.reset_hour_stat()
             self.m_cur_hour = cur_hour
         if cur_day != self.m_cur_day:
-            keyword_stat[3] = keyword_stat[4] = keyword_stat[5] = 0
+            self.reset_day_stat()
             self.m_cur_day = cur_day
         keyword_stat[0] += 1
         keyword_stat[1] += new_link_count
@@ -58,7 +67,6 @@ class HostStat:
         cont = '<html><meta http-equiv="content-type" content="text/html;charset=utf-8"><body><table border="2" cellpadding="1" cellspacing="1" bordercolor="#000000"> \
                 <tr><td>站点名称</td><td>小时列表页下载量</td><td>小时新链接发现数目</td> <td>小时重复链接发现数目</td>\
                 <td>当天列表页下载量</td><td>当天新链接发现数目</td><td>当天重复链接发现数目</td><td>详情</td></tr>'
-        print '1111111111111111'
         for host, keyword_dict in self.m_data.items():
             sum_count = [0,0,0,0,0,0]
             for keyword, stat_data in self.m_data[host].items():

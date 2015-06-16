@@ -438,16 +438,16 @@ class SearchPageParser(parser_extractor):
         if cnt >= self.__item_common_xpath_cnt:
             res_lst.append(last_xpath)
         return '|'.join(res_lst)
-    def __proc_one(self, item_html, xpath_val):
+    def proc_one(self, item_html, xpath_val):
         if xpath_val is None or len(xpath_val)<3:
             return ''
         result = item_html.xpath(xpath_val);
         res_str = ''
         for i in result:
             res_str += i 
-        res_str = self.__safe_decode(res_str)
+        res_str = self.safe_decode(res_str)
         return res_str
-    def __safe_decode(self, str):
+    def safe_decode(self, str):
         if str!= None:
             str = str.replace('\t', '')
             str = str.replace('\r', '')
@@ -502,20 +502,20 @@ class SearchPageParser(parser_extractor):
             try:
                 if cur_xpath_dic.has_key('TITLE'):
                     title_xpath = cur_xpath_dic.get('TITLE')
-                    title = self.__proc_one(item, title_xpath)
-                    #print 'title_xpath:%s' % title_xpath
+                    title = self.proc_one(item, title_xpath)
+                    #print 'title_xpath:%s %s' % (title_xpath, self.m_url)
                 if cur_xpath_dic.has_key('LINK'):
                     link_xpath = cur_xpath_dic.get('LINK')
-                    link = self.__proc_one(item, link_xpath)
+                    link = self.proc_one(item, link_xpath)
                     link = uniform_link(link, self.m_url)
-                    #print 'link_xpath:%s' % link_xpath
+                    #print 'link_xpath:%s %s' % (link_xpath, self.m_url)
                 if cur_xpath_dic.has_key('PUBDATE'):
                     date_xpath = cur_xpath_dic.get('PUBDATE')
-                    date = self.__proc_one(item, date_xpath)
+                    date = self.proc_one(item, date_xpath)
                     #print 'date_xpath:%s' %date_xpath 
                 if cur_xpath_dic.has_key('SOURCE'):
                     source_xpath = cur_xpath_dic.get('SOURCE')
-                    source = self.__proc_one(item, source_xpath)
+                    source = self.proc_one(item, source_xpath)
                     #print 'source_xpath:%s' % source_xpath
                 if source == date:
                     source = re.sub('[\d]', '', source)
@@ -530,7 +530,7 @@ class SearchPageParser(parser_extractor):
                     date = ''
                 if cur_xpath_dic.has_key('SUMMARY'):
                     summary_xpath = cur_xpath_dic.get('SUMMARY')
-                    summary = self.__proc_one(item, summary_xpath)
+                    summary = self.proc_one(item, summary_xpath)
                     summary = summary.replace('\r\n','').replace('\r','').replace('\n','').replace(' ','')
             except Exception, err:
                 #log_error('parse_search_page_by_xpath err %s' % err)
@@ -571,13 +571,6 @@ class SearchPageParser(parser_extractor):
                     sum_unit = self.m_parser.get_text_unit(child)
                     sum_text = sum_unit.get_text(1)
                     summary = sum_text.replace(' ','').replace('\r','')#.replace(title.replace(' ',''),'')
-                #print '$$$$$$$$$$$$$$$$$$$$',sum_text.replace(' ','').replace('\r','').replace('\n','').replace(title.replace(' ',''),'')
-                '''print '***********************************************'
-                print 'title: %s' % title
-                print 'link: %s' % link
-                print 'summary: %s' % summary
-                print 'source: %s' % source
-                print 'date: %s' % date'''
                 json_result = self.final_result(title, link, summary, source, date )
                 yield (json_result, str(child) )
             #用xpath解析失败的child
@@ -596,12 +589,6 @@ class SearchPageParser(parser_extractor):
                             sum_unit = self.m_parser.get_text_unit(child_node)
                             sum_text = sum_unit.get_text(1)
                             summary = sum_text.replace(' ','').replace('\r','')#.replace(title.replace(' ',''),'')
-                        '''print '$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$'
-                        print 'title1: %s' % title
-                        print 'link1: %s' % link
-                        print 'summary1: %s' % summary
-                        print 'source: %s' % source
-                        print 'date1: %s' % date'''
                         if len(link) == 0 or (len(summary)==0 and self.m_has_summary):
                             '''log_error( 'find no link :%s len(link):%d len(summary):%d %s'%\
                                        (self.m_url, len(link),len(summary), str(self.m_has_summary)))'''
@@ -619,7 +606,7 @@ class SearchPageParser(parser_extractor):
         html_str = uniform_web_content(url, html_str)
         html_str = uniform_charset(html_str)
         self.start(url, html_str, html_header)
-        #open('3_%d_html_str.html'%int(time.time()),'w').write(html_str)
+        #    open('3_%d_html_str.html'%int(time.time()),'w').write(html_str)
         for result_dict, child_str in self.parse_search_page():
             if result_dict is None:
                 continue

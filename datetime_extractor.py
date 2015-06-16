@@ -58,8 +58,11 @@ class DateTimeExtractor:
         if res is not None:
             beg_pos = len(text)
             end_pos = 0
+            tm_hour = cur_tm.tm_hour - 2
+            if tm_hour <=0:
+                tm_hour = 0
             tm_lst = [cur_tm.tm_year, cur_tm.tm_mon, cur_tm.tm_mday, \
-                  cur_tm.tm_hour, cur_tm.tm_min, cur_tm.tm_sec]     
+                  tm_hour, cur_tm.tm_min, cur_tm.tm_sec]     
             extract_field_cnt = 0
             for idx in range(len(tm_lst)):
                 try:
@@ -156,7 +159,7 @@ class DateTimeExtractor:
     '''full_extract表示提取文本text里的所有时间，考虑到当文本比较大时，正则匹配会比较耗时'''
     '''full_extract为False时，只会匹配text的头部和尾部，这两部分出现时间的概率较大'''
     '''need_seperate为True时，时间段前后必须有分隔符才行'''
-    def extract(self, text, tm_format='%Y-%m-%d %H:%M:%S', full_extract = False, need_seperate = False):
+    def extract(self, text, tm_format='%Y-%m-%d %H:%M', full_extract = False, need_seperate = False):
         #text = text_val.strip(' ').strip('\t').strip('\n').strip('\r').strip(' ').strip('\t')
         if full_extract or len(text) < self.full_cmp_max_text_length:
             return self.__extract_first(text, tm_format, need_seperate)

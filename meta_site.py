@@ -2,7 +2,8 @@
 from common import *
 import search_page_parser, ConfigParser, json, hashlib, shelve, socket
 import os, sys, re, urllib2, copy, threading, Queue
-import rmw_page_parser
+import rmw_page_parser,news_page_parser
+import traceback, json
 
 class MetaSite:
     m_type = '新闻'
@@ -17,7 +18,7 @@ class MetaSite:
     m_fetch_thread_num = 5
     m_stop_turn_page = True
     m_thread_lst = []
-    def __init__(self, template_dict, dup, result_action, stastic_queue):
+    def __init__(self, template_dict, dup, stastic_queue, result_queue):
         self.m_type = template_dict.get('TASK_TYPE')
         self.m_url_pattern = template_dict.get('REQUEST_URL')
         self.m_search_in_site = template_dict.get('SEARCH_IN_SITE')
@@ -42,17 +43,17 @@ class MetaSite:
         else:
             self.m_timeout_sec = timeout_sec
         self.m_dup = dup
-        self.m_result_action = result_action
         self.m_fetch_keyword_set  = set([])
         self.m_cancel_keyword_set = set([])
         self.m_lock = threading.Lock()
-        self.m_result_queue = Queue.Queue(10000)
-        self.m_send_result_tread = threading.Thread(target=self.send_result, args=())
-        self.m_send_result_tread.start()
-        self.m_thread_lst.append(self.m_send_result_tread)
+        self.m_result_queue = result_queue
         self.m_continious_empty_page_count = 0
-    def get_host(self):
-        protocol, other = urllib.splittype(self.m_url_pattern)
+    def get_host(self, url = ''):
+        if url == '':
+            host_url = self.m_url_pattern
+        else:
+            host_url = url
+        protocol, other = urllib.splittype(host_url)
         host, path = urllib.splithost(other)
         return host
     def get_thread_lst(self):
@@ -114,13 +115,15 @@ class MetaSite:
     def get_site_type(self):
         return self.m_type
     '''解析结果, 抽链接： 页面的任意一个链接变化了，就返回True， 表示接着下载；注意插滤重器'''
-    def format_result(self, link, tsak_type):
+    def format_result(self, link, tsak_type, date='', title = '',maxDepth = -1):
         result_dic = {}
         result_dic["url"] = '%s' % link
+        result_dic["pubdate"] = '%s' % date
+        result_dic["title"] = '%s' % title
         result_dic["siteName"] = ''
         result_dic["channelName"] = ''
         result_dic["siteType"] = '%s' % tsak_type
-        result_dic["maxDepth"] = '%d' % 2
+        result_dic["maxDepth"] = '%d' % maxDepth
         result_dic["gfwed"] =  '%d' % 1
         #json_result = json.dumps(result_dic)
         return result_dic
@@ -128,134 +131,136 @@ class MetaSite:
         keyword = request.m_keyword
         #parse json
         json_result_lst = []
-        #keyword_need_cancel = False
         dup_result_cnt = 0
         new_result_cnt = 0
+        ret = True
+        dup_item_dict = {} 
         for index, json_str in enumerate(result_json_lst):
             cur_result_dict = json.loads(json_str)
-            #获取结果
             result_link = cur_result_dict.get('link')
+            result_title = my_strip(cur_result_dict.get('title'))
+            if result_link.find('&query=')>0 or result_link.find('/ns?word=')>0 or result_link.find('news.haosou.com/ns?j=0')>0:
+                continue
+            result_host = self.get_host(result_link)
+            if result_host == 'www.xici.net' or result_host.find('dedeadmin.com') >= 0 or result_host == "news.baidu.com":
+                continue
+            same_news_link = cur_result_dict.get('same_news_link')
             if self.m_dup_method == 'TITLE':
-                result_title = my_strip(cur_result_dict.get('title'))
                 result_summary = my_strip(cur_result_dict.get('summary'))
                 dup_key = '%s%s' % (result_title, result_summary[0:20])
             else:
                 dup_key = result_link
-            if not self.m_dup.check(dup_key):
-                #keyword_need_cancel = False
-                new_result_cnt += 1
-                self.m_dup.insert(dup_key)
-                json_result_lst.append(self.format_result(result_link, self.m_type))
-            else:
-                dup_result_cnt += 1
-                log_info('skip the dump one:%s'% result_link)
+            dup_item_dict[dup_key] = cur_result_dict
+        new_dup_key_lst = self.m_dup.obtain_new_lst(dup_item_dict.keys())
+        new_result_cnt  = len(new_dup_key_lst)
+        dup_result_cnt  = len(result_json_lst) - new_result_cnt
+        for dup_key in new_dup_key_lst:
+            result_link = cur_result_dict.get('link')
+            cur_result_dict = dup_item_dict[dup_key]
+            result_date = cur_result_dict.get('date')
+            if result_date is None:
+                result_date=''
+            json_result_lst.append(self.format_result(result_link, self.m_type, title = result_title, date = result_date))
+            '''加入新闻相同链接'''
+            #same_news_link = cur_result_dict.get('same_news_link')
+            #if same_news_link is not None:
+            #    json_result_lst.append(self.format_result(same_news_link, self.m_type, maxDepth = 0))
         if new_result_cnt + dup_result_cnt == 0:
             self.m_continious_empty_page_count += 1
         else:
             self.m_continious_empty_page_count = 0
+        '''统计信息'''
+        while True:
+            try:
+                self.m_stastic_queue.put((self.get_host(), self.decode_keyword(keyword), new_result_cnt, dup_result_cnt))
+                log_info('add stat %s %s new:%d dup:%d' % (self.get_host(), self.decode_keyword(keyword), new_result_cnt, dup_result_cnt))
+                break
+            except Exception, err:
+               log_error("put stastic error: %s, %s" % (err, traceback.format_exc()))
+               time.sleep(1)
         '''cancel条件： ①这一页有结果，但是没有新的链接; ②连续的空白页'''
         if (new_result_cnt == 0 and dup_result_cnt > 0 and self.m_stop_turn_page) or self.m_continious_empty_page_count >= 5:
-            #keyword_need_cancel = True
             self.m_lock.acquire()
             self.m_cancel_keyword_set.add(keyword)
             self.m_lock.release()
             return
-        '''统计信息'''
-        self.m_stastic_queue.put((self.get_host(), self.decode_keyword(keyword), new_result_cnt, dup_result_cnt))
         '''发送结果'''
         json_result_dict = {}
-        json_result_dict["tasks"] = json_result_lst
-        post_data = json.dumps(json_result_dict)
-        while True:
-            if self.m_result_queue.qsize()>10000:
-                time.sleep(2)
-                continue
-            self.m_result_queue.put(post_data)
-            log_info('put result success: 1/%d.' % self.m_result_queue.qsize())
-            break
-    def send_result(self):
-        #log_info('$$$$$$thread send_result start$$$$$$')
-        while True:
-            post_data = None
-            if self.m_result_queue.qsize()==0:
-                time.sleep(2)
-                continue
-            try:
-                post_data = self.m_result_queue.get()
-                urllib2.urlopen(self.m_result_action, data = post_data )
-                log_info('send result action success: 1/%d. %s' % (self.m_result_queue.qsize(),self.m_result_action))
-            except Exception, err:
-                log_error('send result action %s error: %s' % (self.m_result_action, err))
-                if not post_data:
-                    self.m_result_queue.put(post_data)
-                time.sleep(1)
+        log_info('json_result_lst len : %d' % len(json_result_lst))
+        if len(json_result_lst) >0:
+            json_result_dict["tasks"] = json_result_lst
+            post_data = json.dumps(json_result_dict)
+            while True:
+                if self.m_result_queue.qsize()>10000:
+                    time.sleep(2)
+                    continue
+                self.m_result_queue.put(post_data)
+                log_info('put result success: 1/%d.' % self.m_result_queue.qsize())
+                break
 
 class NewsMetaSite(MetaSite):
-    def __init__(self, template_dict, dup, result_action, stastic_queue):
-        MetaSite.__init__(self, template_dict, dup, result_action, stastic_queue)
+    def __init__(self, template_dict, dup, stastic_queue, result_queue):
+        MetaSite.__init__(self, template_dict, dup, stastic_queue, result_queue)
+    def get_parser(self):
+        return news_page_parser.NewsPageParser()
+
 class BbsMetaSite(MetaSite):
-    def __init__(self, template_dict, dup, result_action, stastic_queue):
-        MetaSite.__init__(self, template_dict, dup, result_action, stastic_queue)
+    def __init__(self, template_dict, dup, stastic_queue, result_queue):
+        MetaSite.__init__(self, template_dict, dup, stastic_queue, result_queue)
+
 class RmwMetaSite(MetaSite):
-    def __init__(self, template_dict, dup, result_action, stastic_queue):
-        MetaSite.__init__(self, template_dict, dup, result_action, stastic_queue)
+    def __init__(self, template_dict, dup, stastic_queue, result_queue):
+        MetaSite.__init__(self, template_dict, dup, stastic_queue, result_queue)
     def get_parser(self):
         return rmw_page_parser.RmwPageParser()
 
 class BlogMetaSite(MetaSite):
-    def __init__(self, template_dict, dup, result_action, stastic_queue):
-        MetaSite.__init__(self, template_dict, dup, result_action, stastic_queue)
+    def __init__(self, template_dict, dup, stastic_queue, result_queue):
+        MetaSite.__init__(self, template_dict, dup, stastic_queue, result_queue)
         
 class WebchatMetaSite(MetaSite):
-    def __init__(self, template_dict, dup, result_action, stastic_queue):
-        MetaSite.__init__(self, template_dict, dup, result_action, stastic_queue)
+    def __init__(self, template_dict, dup, stastic_queue, result_queue):
+        MetaSite.__init__(self, template_dict, dup, stastic_queue, result_queue)
 
 class DupDetector:
-    def __init__(self, dup_file_name, sync_interval_sec = 10):
-        self.m_last_sync_time = time.time()
-        self.m_sync_interval_sec = sync_interval_sec
-        self.m_lock = threading.Lock()
-        try:
-            self.m_storage = shelve.open(dup_file_name)
-        except Exception, err:
-            log_error('DupDetector open file %s error: %s' % (dup_file_name, err))
-            sys.exit(1)
-    def sync(self):
-        if self.m_last_sync_time + self.m_sync_interval_sec < time.time():
-            self.m_storage.sync()
-            self.m_last_sync_time = time.time()
-    def check(self, url):
-        self.sync()
-        key = hashlib.md5(url).hexdigest()
-        self.m_lock.acquire()
-        if self.m_storage.get(key) is not None:
-            self.m_lock.release()
-            return True
-        self.m_lock.release()
-        return False
-    def insert(self, url):
-        log_info('insert into filter: %s'% url)
-        key = hashlib.md5(url).hexdigest()
-        self.m_lock.acquire()
-        self.m_storage[key] = 1
-        self.m_lock.release()
-        self.sync()
-    def pop(self, url):
-        key = hashlib.md5(url).hexdigest()
-        self.m_lock.acquire()
-        self.m_storage.pop(key)
-        self.m_lock.release()
-    def close(self):
-        self.m_lock.acquire()
-        self.m_storage.sync()
-        self.m_lock.release()
+    def __init__(self, dup_service_url):
+        self.m_dup_service_url = dup_service_url
+    def obtain_new_lst(self, key_lst):
+        item_lst = []
+        for key in key_lst:
+            item = {}
+            item['lk'] = key
+            item['op'] = 'i'
+            item_lst.append(item)
+        if len(key_lst) == 0:
+            return [] 
+        post_data = json.dumps(item_lst)
+        res_lst   = []
+        while True:
+            try:
+                res_lst = json.loads(urllib2.urlopen(self.m_dup_service_url, data = post_data).read())
+                break
+            except Exception, err:
+                log_error('request DupDetector %s error: %s' % (self.m_dup_service_url, err));
+                time.sleep(1)
+        if res_lst is None or len(res_lst) == 0:
+            log_error('recv empty item list from dup service')
+            return []
+        new_key_lst = []
+        for res in res_lst:
+            if res.get('lk') is None or res.get('st') is None:
+                log_error('invalid dup return result: %s' % res)
+                continue
+            if res['st'] == '0':
+                new_key_lst.append(res['lk']) 
+        return new_key_lst;
 
 class MetaSiteFactory:
-    def __init__(self, dup_file_dir, result_action, stastic_queue):
-        self.m_dup_file_dir = dup_file_dir
-        self.m_dup_file_map = {}
-        self.m_result_action = result_action
+    def __init__(self, dup_service_url, stastic_queue, result_queue):
+        self.m_dup = DupDetector(dup_service_url)
+        self.m_host_set = set()
         self.m_stastic_queue = stastic_queue
+        self.m_result_queue  = result_queue 
     def __read_config(self, template_file):
         cf = ConfigParser.ConfigParser()
         cf.read(template_file)
@@ -326,9 +331,6 @@ class MetaSiteFactory:
         protocol, other = urllib.splittype(url)
         host, path = urllib.splithost(other)
         return host
-    def close(self):
-        for host, dup in self.m_dup_file_map.items():
-            dup.close()
     '''返回metasite'''
     def create_site(self, template_file):
         log_info('MetaSiteFactory create_site start')
@@ -344,21 +346,21 @@ class MetaSiteFactory:
         meta_site = None
         '''TODO: add site modify here'''
         host_name = self.__get_host(template_dict.get('REQUEST_URL'))
-        if self.m_dup_file_map.get(host_name):
-            log_info('dumplicate fetch host %s' % host_name)
-            return meta_site
-        site_dup_detector  = DupDetector('%s/%s.dat' % (self.m_dup_file_dir.rstrip('/'), host_name))
+        if host_name in self.m_host_set:
+            log_error('dumplicate site task: %s' % host_name)
+        else:
+            self.m_host_set.add(host_name)
         if task_type == "新闻":
             if host_name == 'search.people.com.cn':
-                meta_site = RmwMetaSite(template_dict, site_dup_detector, self.m_result_action, self.m_stastic_queue)
+                meta_site = RmwMetaSite(template_dict, self.m_dup, self.m_stastic_queue, self.m_result_queue)
             else:
-                meta_site = NewsMetaSite(template_dict, site_dup_detector, self.m_result_action, self.m_stastic_queue)
+                meta_site = NewsMetaSite(template_dict, self.m_dup, self.m_stastic_queue, self.m_result_queue)
         elif task_type == '博客':
-            meta_site = BlogMetaSite(template_dict, site_dup_detector, self.m_result_action, self.m_stastic_queue)
+            meta_site = BlogMetaSite(template_dict, self.m_dup, self.m_stastic_queue, self.m_result_queue)
         elif task_type == '论坛':
-            meta_site = BbsMetaSite(template_dict, site_dup_detector, self.m_result_action, self.m_stastic_queue)
+            meta_site = BbsMetaSite(template_dict, self.m_dup, self.m_stastic_queue, self.m_result_queue)
         elif task_type == '微信':
-            meta_site = WebchatMetaSite(template_dict, site_dup_detector, self.m_result_action, self.m_stastic_queue)
+            meta_site = WebchatMetaSite(template_dict, self.m_dup, self.m_stastic_queue, self.m_result_queue)
         else:
             log_error('the template %s has invalid TASKTYPE: %s' % (template_file, task_type))
             return None

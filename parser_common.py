@@ -83,6 +83,10 @@ def uniform_link(link, page_url):
     elif link.startswith('?'):
         other, query = urllib.splitquery(page_url)
         link = '%s%s' % (other, link)
+    elif not link.startswith('http'):
+        link = link.split('?')[-1]
+        other, query = urllib.splitquery(page_url)
+        link = '%s?%s' % (other, link)
     return link
 
 def uniform_charset(html_str):

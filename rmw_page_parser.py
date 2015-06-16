@@ -49,12 +49,18 @@ class RmwPageParser():
             print '$$$%s$$$' % summary
             result_dict['summary'] = summary'''
             #date
+            date_str = ''
             try:
                 pubdate_node = result.find('PUBLISHTIME')
                 date = pubdate_node.text
+                date = date.replace('年','-').replace('月','-').replace('日',' ').replace('时',':').replace('分',':').replace('秒','')
+                time_int = time.mktime(time.strptime(date,'%Y-%m-%d %H:%M:%S'))
+                date_str = time.strftime('%Y-%m-%d %H:%M',time.localtime(time_int))
             except Exception,err:
+                #print err
                 pass
-            result_dict['date'] = date
+            #print 'date_str',date_str
+            result_dict['date'] = date_str
             #source
             try:
                 source_node = result.find('SOURCE')

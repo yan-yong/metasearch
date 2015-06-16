@@ -3,19 +3,20 @@ from common import *
 from meta_site import *
 import proxy_spider
 import ConfigParser, threading
-import multiprocessing, stat_server
+import multiprocessing, stat_server, Queue
 
 class MetaSearch:
     def __init__(self):
         self.m_proxy_server_url = 'http://59.108.122.184:9090/'
         self.m_site_dir = 'site'
         self.m_keyword_file = 'keyword.dat'
-        self.m_dup_dir = 'dup_dir'
+        self.m_dup_service_url = 'http://127.0.0.1:2345'
         self.m_schedule_interval_sec = 3600
         self.m_result_action = 'http://127.0.0.1:10000/'
         self.m_site_task_lst = []
         self.m_keyword_lst = []
         self.m_meta_task_factory = None
+        self.m_result_queue = None 
         self.m_thd_lst = []
         self.m_exit = False
         self.m_each_fetch_count = 50
@@ -44,7 +45,6 @@ class MetaSearch:
                 req_url += '&%s' % str(fetch_req.data)
             yield fetch_req, req_url, res_html, res_header
     def fetch_one_round(self, proxy_fetcher, task_site, should_exit):
-        #log_info('fetch_one_round start')
         task_site.set_keyword(self.m_keyword_lst)
         req_lst = []
         fetch_parser = task_site.get_parser()
@@ -57,19 +57,31 @@ class MetaSearch:
             if should_exit:
                 return
             timeout_sec = req.m_timeout_sec
+            res_count = 0
+            none_count = 0
+            log_info("thread %s sync fetch %d requests" % (task_site.get_host(), len(req_lst)))
             for fetch_req, req_url, res_html, res_header in self.sync_fetch_result_generator(proxy_fetcher, req_lst, timeout_sec, should_exit):
                 json_result_lst = fetch_parser.get_parse_result(req_url, res_html, res_header)
-                if json_result_lst is None or len(json_result_lst) == 0:
+                if json_result_lst is None:
+                    none_count += 1
                     continue
+                res_count += 1
                 task_site.handle_result(json_result_lst, fetch_req)
             del req_lst[:]
+            log_info("thread %s sync recv %d result, %d none, %d request" % (task_site.get_host(), res_count, none_count, len(req_lst)))
         '''处理剩余结果'''
         timeout_sec = req.m_timeout_sec
+        res_count = 0
+        none_count = 0
+        log_info("thread %s sync fetch %d requests" % (task_site.get_host(), len(req_lst)))
         for fetch_req, req_url, res_html, res_header in self.sync_fetch_result_generator(proxy_fetcher, req_lst, timeout_sec, should_exit):
             json_result_lst = fetch_parser.get_parse_result(fetch_req.get_full_url(), res_html, res_header)
-            if json_result_lst is None or len(json_result_lst) == 0:
+            if json_result_lst is None:
+                none_count += 1
                 continue
+            res_count += 1
             task_site.handle_result(json_result_lst, fetch_req)
+        log_info("thread %s sync recv %d result, %d none, %d request" % (task_site.get_host(), res_count, none_count, len(req_lst)))
     def load_config(self, config_file):
         try:
             cf = ConfigParser.ConfigParser()
@@ -85,8 +97,8 @@ class MetaSearch:
                 self.m_site_dir = cf.get('METASEARCH', 'site_dir')
             if cf.has_option('METASEARCH', 'keyword_file'):
                 self.m_keyword_file = cf.get('METASEARCH', 'keyword_file')
-            if cf.has_option('METASEARCH', 'dup_detector_dir'):
-                self.m_dup_dir = cf.get('METASEARCH', 'dup_detector_dir')
+            if cf.has_option('METASEARCH', 'dup_service_url'):
+                self.m_dup_service_url = cf.get('METASEARCH', 'dup_service_url')
             if cf.has_option('METASEARCH', 'schedule_interval_sec'):
                 self.m_schedule_interval_sec = cf.getint('METASEARCH', 'schedule_interval_sec')
             if cf.has_option('METASEARCH', 'worker_process_num'):
@@ -101,7 +113,11 @@ class MetaSearch:
             log_error('MetaSearch::load_config %s exception: %s' % (config_file, err))
             sys.exit(1)
     def worker_process(self, site_file_lst):
-        self.m_meta_task_factory = MetaSiteFactory(self.m_dup_dir, self.m_result_action, self.m_stastic_queue)
+        self.m_result_queue = Queue.Queue(100000)
+        self.m_meta_task_factory = MetaSiteFactory(self.m_dup_service_url, self.m_stastic_queue, self.m_result_queue)
+        '''spawn all work thread'''
+        result_thd = threading.Thread(target = self.result_runtine)
+        result_thd.start()
         for site_file in site_file_lst:
             site_task = self.m_meta_task_factory.create_site(site_file)
             if site_task is None:
@@ -114,8 +130,10 @@ class MetaSearch:
         for thd in self.m_thd_lst:
             thd.start()
         log_info('spawn %d task thread success.' % len(self.m_thd_lst))
+        '''wait'''
         for thd in self.m_thd_lst:
             thd.join()
+        result_thd.join()        
     def http_stat_thread(self):
         self.m_stat_server.start((self.m_stat_http_server_ip, self.m_stat_http_server_port))        
     '''runtine start'''  
@@ -147,7 +165,7 @@ class MetaSearch:
         self.m_stastic_queue = multiprocessing.Queue()
         worker_proc_lst = []
         site_sum_len = len(site_file_lst)
-        each_proc_file_num = site_sum_len / self.m_work_process_num
+        each_proc_file_num = (site_sum_len + self.m_work_process_num - 1)/ self.m_work_process_num
         if each_proc_file_num == 0:
             each_proc_file_num = 1
         proc_beg_idx = 0
@@ -181,6 +199,8 @@ class MetaSearch:
     def close(self):
         self.m_exit = True
         log_info('MetaSearch begin close ... ')
+        if self.m_meta_task_factory is not None:
+            self.m_meta_task_factory.close()
         for thd in self.m_thd_lst:
             thd.join()
         log_info('MetaSearch close success. ')
@@ -189,7 +209,7 @@ class MetaSearch:
         fetcher = proxy_spider.NewProxySpider(proxy_server_url = self.m_proxy_server_url, \
                                               internal_thread_num = site_task.m_fetch_thread_num, \
                                               foreign_thread_num = 0, socket_timeout = 10)
-        #log_info('fetch_runtine thread %d start!' % thd_id)
+        log_info('fetch_runtine thread %s start!' % site_task.get_host())
         fetcher.start()
         last_schedule_time = 0
         schedule_interval_sec = site_task.get_schedule_interval()
@@ -199,7 +219,7 @@ class MetaSearch:
                 time.sleep(1)
                 continue
             last_schedule_time = time.time()
-            log_info('fetch_runtine thread %d fetch_one_round!' % thd_id)
+            log_info('fetch_runtine thread %s fetch_one_round!' % site_task.get_host())
             self.fetch_one_round(fetcher, site_task, self.m_exit)
             #抓取间隔为-1则只抓一次
             if schedule_interval_sec < 0:
@@ -207,7 +227,29 @@ class MetaSearch:
         thd_lst = site_task.get_thread_lst()
         for thd in thd_lst:
             thd.join()
-        log_info('fetch_runtine thread %d stop!' % thd_id)
+        log_info('fetch_runtine thread %s stop!' % site_task.get_host())
+    '''发送结果线程'''
+    def result_runtine(self):
+        log_info('result_runtine thread start!')
+        send_count = 0
+        while self.m_exit is False:
+            post_data = None
+            if self.m_result_queue.qsize()==0:
+                time.sleep(2)
+                continue
+            try:
+                post_data = self.m_result_queue.get()
+                print "post_data: ", post_data
+                urllib2.urlopen(self.m_result_action, data = post_data )
+                send_count += 1
+                if send_count % 10 == 0:
+                    log_info('send result action success: %d/%d --> %s' % (send_count, self.m_result_queue.qsize(), self.m_result_action))
+            except Exception, err:
+                log_error('send result action %s error: %s, retry 5 second later.' % (self.m_result_action, err))
+                if not post_data:
+                    self.m_result_queue.put(post_data)
+                time.sleep(5)
+        log_info('result_runtine thread stop!')
         
 def main():
     config_file = 'metasearch.cfg'
